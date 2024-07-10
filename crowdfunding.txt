@@ -1,0 +1,175 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IBEP20 {
+    function totalSupply() external view returns (uint256);
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function approve(address spender, uint256 amount) external returns (bool);
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
+
+contract KoalaToken is IBEP20 {
+    string public constant name = "Koala";
+    string public constant symbol = "KOALA";
+    uint8 public constant decimals = 18;
+
+    mapping(address => uint256) balances;
+    mapping(address => mapping (address => uint256)) allowed;
+    uint256 totalSupply_;
+
+    using SafeMath for uint256;
+
+    constructor(uint256 total) {
+        totalSupply_ = total;
+        balances[msg.sender] = totalSupply_;
+    }
+
+    function totalSupply() public override view returns (uint256) {
+        return totalSupply_;
+    }
+
+    function balanceOf(address tokenOwner) public override view returns (uint256) {
+        return balances[tokenOwner];
+    }
+
+    function transfer(address receiver, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[msg.sender]);
+        balances[msg.sender] = balances[msg.sender].sub(numTokens);
+        balances[receiver] = balances[receiver].add(numTokens);
+        emit Transfer(msg.sender, receiver, numTokens);
+        return true;
+    }
+
+    function approve(address delegate, uint256 numTokens) public override returns (bool) {
+        allowed[msg.sender][delegate] = numTokens;
+        emit Approval(msg.sender, delegate, numTokens);
+        return true;
+    }
+
+    function allowance(address owner, address delegate) public override view returns (uint256) {
+        return allowed[owner][delegate];
+    }
+
+    function transferFrom(address owner, address buyer, uint256 numTokens) public override returns (bool) {
+        require(numTokens <= balances[owner]);
+        require(numTokens <= allowed[owner][msg.sender]);
+
+        balances[owner] = balances[owner].sub(numTokens);
+        allowed[owner][msg.sender] = allowed[owner][msg.sender].sub(numTokens);
+        balances[buyer] = balances[buyer].add(numTokens);
+        emit Transfer(owner, buyer, numTokens);
+        return true;
+    }
+}
+
+contract KoalaCrowdFunding {
+    using SafeMath for uint256;
+
+    IBEP20 public koalaToken;
+    address public owner;
+    uint256 public constant MIN_INVESTMENT = 10 * 10**18; // $10 in Wei
+    uint256 public constant MAX_INVESTMENT = 50000 * 10**18; // $50000 in Wei
+    uint256 public constant DAILY_ROI = 20; // 0.2% daily ROI
+    uint256 public constant REINVEST_PERCENTAGE = 20; // 20% reinvestment on withdrawal
+
+    struct Investor {
+        uint256 investment;
+        uint256 referralEarnings;
+        uint256 binaryEarnings;
+        uint256 lastWithdrawn;
+    }
+
+    mapping(address => Investor) public investors;
+    mapping(address => address) public referrals;
+    uint256 public totalInvested;
+
+    event Investment(address indexed investor, uint256 amount);
+    event Withdrawal(address indexed investor, uint256 amount);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
+        _;
+    }
+
+    constructor(IBEP20 _koalaToken) {
+        owner = msg.sender;
+        koalaToken = _koalaToken;
+    }
+
+    function invest(uint256 amount, address referrer) public {
+        require(amount >= MIN_INVESTMENT && amount <= MAX_INVESTMENT, "Invalid investment amount");
+
+        koalaToken.transferFrom(msg.sender, address(this), amount);
+
+        if (investors[msg.sender].investment == 0) {
+            referrals[msg.sender] = referrer;
+        }
+
+        uint256 referralBonus = amount.mul(15).div(100);
+        koalaToken.transfer(referrer, referralBonus);
+
+        // Binary bonus logic (simplified for example)
+        // Add binary bonus calculation logic here
+
+        investors[msg.sender].investment = investors[msg.sender].investment.add(amount);
+        investors[msg.sender].referralEarnings = investors[msg.sender].referralEarnings.add(referralBonus);
+        investors[msg.sender].lastWithdrawn = block.timestamp;
+
+        totalInvested = totalInvested.add(amount);
+
+        emit Investment(msg.sender, amount);
+    }
+
+    function calculateROI(address investor) public view returns (uint256) {
+        uint256 investment = investors[investor].investment;
+        uint256 daysPassed = (block.timestamp.sub(investors[investor].lastWithdrawn)).div(1 days);
+        return investment.mul(DAILY_ROI).mul(daysPassed).div(10000); // 0.2% daily
+    }
+
+    function withdraw() public {
+        uint256 roi = calculateROI(msg.sender);
+        uint256 reinvestAmount = roi.mul(REINVEST_PERCENTAGE).div(100);
+        uint256 withdrawAmount = roi.sub(reinvestAmount);
+
+        investors[msg.sender].investment = investors[msg.sender].investment.add(reinvestAmount);
+        investors[msg.sender].lastWithdrawn = block.timestamp;
+
+        koalaToken.transfer(msg.sender, withdrawAmount);
+
+        emit Withdrawal(msg.sender, withdrawAmount);
+    }
+
+    function emergencyWithdraw() public onlyOwner {
+        uint256 balance = koalaToken.balanceOf(address(this));
+        koalaToken.transfer(owner, balance);
+    }
+}
+
+library SafeMath {
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b <= a, "Subtraction overflow");
+        return a - b;
+    }
+
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        uint256 c = a + b;
+        require(c >= a, "Addition overflow");
+        return c;
+    }
+
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        require(b > 0, "Division by zero");
+        return a / b;
+    }
+
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (a == 0) return 0;
+        uint256 c = a * b;
+        require(c / a == b, "Multiplication overflow");
+        return c;
+    }
+}
